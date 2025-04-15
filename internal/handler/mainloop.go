@@ -14,7 +14,7 @@ const TASK_CHANNEL = "coderunner_task_channel"
 func HandleStartTaskCommands(
 	ctx context.Context,
 	redisClient *redis.Client,
-	tasksToCompile chan model.TaskState,
+	tasksToCompile chan model.Task,
 ) {
 	pubsub := redisClient.Subscribe(ctx, TASK_CHANNEL)
 	for msg := range pubsub.Channel() {
@@ -27,12 +27,12 @@ func HandleStartTaskCommands(
 
 		fmt.Printf("Received task: %+v\n", taskCommand)
 
-		task := model.TaskState{
+		task := model.Task{
 			ID:            taskCommand.ID,
 			CodeLocation:  taskCommand.CodeLocation,
 			TestsLocation: taskCommand.TestsLocation,
 			Compiler:      taskCommand.Compiler,
-			State:         model.PENDING_TASK_STATE,
+			State:         model.CompilingTaskState,
 		}
 		jsonBytes, err := json.Marshal(task)
 		if err != nil {

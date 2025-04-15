@@ -24,18 +24,20 @@ func HandleTasksToCompile(
 	ctx context.Context,
 	minioClient *minio.Client,
 	dockerClient *client.Client,
-	tasksToCompile chan model.TaskState,
+	tasksToCompile chan model.Task,
+	tasksToTest chan model.Task,
 ) {
 	for task := range tasksToCompile {
-		handleTask(ctx, minioClient, dockerClient, task)
+		handleTaskToCompile(ctx, minioClient, dockerClient, task, tasksToTest)
 	}
 }
 
-func handleTask(
+func handleTaskToCompile(
 	ctx context.Context,
 	minioClient *minio.Client,
 	dockerClient *client.Client,
-	task model.TaskState,
+	task model.Task,
+	tasksToTest chan model.Task,
 ) {
 	fmt.Printf("Task to compile: %+v\n", task)
 
@@ -45,7 +47,7 @@ func handleTask(
 		return
 	}
 
-	containerID, err := runContainer(ctx, dockerClient)
+	containerID, err := runContainer(ctx, dockerClient, "gcc:latest")
 	if err != nil {
 		fmt.Printf("Error running container: %v\n", err)
 		return
@@ -77,7 +79,7 @@ func handleTask(
 		ctx,
 		containerID,
 		container.ExecOptions{
-			Cmd:          []string{"g++", containerCodePath, "-o", outputPath},
+			Cmd:          []string{"g++", containerCodePath, "-o", outputPath, "-static"},
 			AttachStderr: true,
 			AttachStdout: true,
 		},
@@ -129,14 +131,27 @@ func handleTask(
 		return
 	}
 
-	minioClient.PutObject(
+	objectName := fmt.Sprintf("%s.out", task.ID)
+
+	_, err = minioClient.PutObject(
 		ctx,
 		executablesBucketName,
-		fmt.Sprintf("%s.out", task.ID),
+		objectName,
 		bytes.NewReader(executableData),
 		int64(len(executableData)),
 		minio.PutObjectOptions{},
 	)
+	if err != nil {
+		fmt.Printf("Error put object to minio: %v\n", err)
+		return
+	}
+
+	task.State = model.TestingTaskState
+	task.ExecutableLocation = model.MinIOLocation{
+		BucketName: executablesBucketName,
+		ObjectName: objectName,
+	}
+	tasksToTest <- task
 }
 
 func loadCodeFromMinio(
@@ -165,11 +180,15 @@ func loadCodeFromMinio(
 	return string(content), nil
 }
 
-func runContainer(ctx context.Context, dockerClient *client.Client) (string, error) {
+func runContainer(
+	ctx context.Context,
+	dockerClient *client.Client,
+	image string,
+) (string, error) {
 	resp, err := dockerClient.ContainerCreate(
 		ctx,
 		&container.Config{
-			Image: "gcc:latest",
+			Image: image,
 			Cmd:   []string{"tail", "-f", "/dev/null"},
 		},
 		nil,

@@ -30,12 +30,28 @@ func main() {
 		panic(err)
 	}
 
-	tasksToCompile := make(chan model.TaskState, 100)
+	tasksToCompile := make(chan model.Task, 100)
+	tasksToTest := make(chan model.Task, 100)
 
 	fmt.Println("RUN!")
 
 	for range 5 {
-		go handler.HandleTasksToCompile(ctx, minioClient, dockerClient, tasksToCompile)
+		go handler.HandleTasksToCompile(
+			ctx,
+			minioClient,
+			dockerClient,
+			tasksToCompile,
+			tasksToTest,
+		)
+	}
+
+	for range 3 {
+		go handler.HandleTasksToTest(
+			ctx,
+			minioClient,
+			dockerClient,
+			tasksToTest,
+		)
 	}
 
 	handler.HandleStartTaskCommands(ctx, redisClient, tasksToCompile)
