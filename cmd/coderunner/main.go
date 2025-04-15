@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/docker/docker/client"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/redis/go-redis/v9"
@@ -21,15 +22,23 @@ func main() {
 
 	minioClient := getMinioClient()
 
-	receivedTasks := make(chan model.TaskState, 100)
+	dockerClient, err := client.NewClientWithOpts(
+		client.FromEnv,
+		client.WithAPIVersionNegotiation(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	tasksToCompile := make(chan model.TaskState, 100)
 
 	fmt.Println("RUN!")
 
 	for range 5 {
-		go handler.HandleReceivedTasks(ctx, minioClient, receivedTasks)
+		go handler.HandleTasksToCompile(ctx, minioClient, dockerClient, tasksToCompile)
 	}
 
-	handler.HandleStartTaskCommands(ctx, redisClient, receivedTasks)
+	handler.HandleStartTaskCommands(ctx, redisClient, tasksToCompile)
 }
 
 func getRedisClient() *redis.Client {
