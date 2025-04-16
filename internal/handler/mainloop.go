@@ -9,14 +9,12 @@ import (
 	"github.com/t3m8ch/coderunner/internal/model"
 )
 
-const TASK_CHANNEL = "coderunner_task_channel"
-
 func HandleStartTaskCommands(
 	ctx context.Context,
 	redisClient *redis.Client,
 	tasksToCompile chan model.Task,
 ) {
-	pubsub := redisClient.Subscribe(ctx, TASK_CHANNEL)
+	pubsub := redisClient.Subscribe(ctx, taskChannel)
 	for msg := range pubsub.Channel() {
 		var taskCommand model.StartTaskCommand
 		err := json.Unmarshal([]byte(msg.Payload), &taskCommand)

@@ -10,8 +10,6 @@ import (
 	"github.com/t3m8ch/coderunner/internal/model"
 )
 
-const executablePath = "/app/exec.out"
-
 func HandleTasksToTest(
 	ctx context.Context,
 	minioClient *minio.Client,
@@ -40,7 +38,7 @@ func handleTaskToTest(
 	containerID, err := containerManager.CreateContainer(
 		ctx,
 		"debian:bookworm",
-		[]string{executablePath},
+		[]string{testingExecPath},
 	)
 	if err != nil {
 		fmt.Printf("Error creating container: %v\n", err)
@@ -54,7 +52,7 @@ func handleTaskToTest(
 		}
 	}()
 
-	err = containerManager.CopyFileToContainer(ctx, containerID, executablePath, 0700, executable)
+	err = containerManager.CopyFileToContainer(ctx, containerID, testingExecPath, 0700, executable)
 	if err != nil {
 		fmt.Printf("Error copying code to container: %v\n", err)
 		return

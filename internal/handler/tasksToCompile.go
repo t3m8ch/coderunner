@@ -11,12 +11,6 @@ import (
 	"github.com/t3m8ch/coderunner/internal/model"
 )
 
-const (
-	containerCodePath     = "/app/main.cpp"
-	outputPath            = "/app/output"
-	executablesBucketName = "executables"
-)
-
 func HandleTasksToCompile(
 	ctx context.Context,
 	minioClient *minio.Client,
@@ -47,7 +41,7 @@ func handleTaskToCompile(
 	containerID, err := containerManager.CreateContainer(
 		ctx,
 		"gcc:latest",
-		[]string{"g++", containerCodePath, "-o", outputPath, "-static"},
+		[]string{"g++", sourceFilePath, "-o", compileExecPath, "-static"},
 	)
 	if err != nil {
 		fmt.Printf("Error creating container: %v\n", err)
@@ -61,7 +55,7 @@ func handleTaskToCompile(
 		}
 	}()
 
-	err = containerManager.CopyFileToContainer(ctx, containerID, containerCodePath, 0644, []byte(code))
+	err = containerManager.CopyFileToContainer(ctx, containerID, sourceFilePath, 0644, []byte(code))
 	if err != nil {
 		fmt.Printf("Error copying code to container: %v\n", err)
 		return
@@ -88,7 +82,7 @@ func handleTaskToCompile(
 		return
 	}
 
-	executable, err := containerManager.LoadFileFromContainer(ctx, containerID, outputPath)
+	executable, err := containerManager.LoadFileFromContainer(ctx, containerID, compileExecPath)
 	if err != nil {
 		fmt.Printf("Error copying executable: %v\n", err)
 		return
@@ -98,7 +92,7 @@ func handleTaskToCompile(
 
 	_, err = minioClient.PutObject(
 		ctx,
-		executablesBucketName,
+		execBucketName,
 		objectName,
 		bytes.NewReader(executable),
 		int64(len(executable)),
@@ -111,7 +105,7 @@ func handleTaskToCompile(
 
 	task.State = model.TestingTaskState
 	task.ExecutableLocation = model.MinIOLocation{
-		BucketName: executablesBucketName,
+		BucketName: execBucketName,
 		ObjectName: objectName,
 	}
 	tasksToTest <- task
