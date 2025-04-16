@@ -1,16 +1,13 @@
 package handler
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
-	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
 	"github.com/minio/minio-go/v7"
+	"github.com/t3m8ch/coderunner/internal/containerctl"
 	"github.com/t3m8ch/coderunner/internal/model"
 )
 
@@ -23,19 +20,19 @@ const (
 func HandleTasksToCompile(
 	ctx context.Context,
 	minioClient *minio.Client,
-	dockerClient *client.Client,
+	containerManager containerctl.Manager,
 	tasksToCompile chan model.Task,
 	tasksToTest chan model.Task,
 ) {
 	for task := range tasksToCompile {
-		handleTaskToCompile(ctx, minioClient, dockerClient, task, tasksToTest)
+		handleTaskToCompile(ctx, minioClient, containerManager, task, tasksToTest)
 	}
 }
 
 func handleTaskToCompile(
 	ctx context.Context,
 	minioClient *minio.Client,
-	dockerClient *client.Client,
+	containerManager containerctl.Manager,
 	task model.Task,
 	tasksToTest chan model.Task,
 ) {
@@ -47,87 +44,53 @@ func handleTaskToCompile(
 		return
 	}
 
-	containerID, err := runContainer(ctx, dockerClient, "gcc:latest")
+	containerID, err := containerManager.CreateContainer(
+		ctx,
+		"gcc:latest",
+		[]string{"g++", containerCodePath, "-o", outputPath, "-static"},
+	)
 	if err != nil {
-		fmt.Printf("Error running container: %v\n", err)
+		fmt.Printf("Error creating container: %v\n", err)
 		return
 	}
 
 	defer func() {
-		err = dockerClient.ContainerRemove(
-			ctx,
-			containerID,
-			container.RemoveOptions{Force: true},
-		)
+		err = containerManager.RemoveContainer(ctx, containerID)
 		if err != nil {
 			fmt.Printf("Error container removing: %v\n", err)
 		}
 	}()
 
-	err = copyCodeToContainer(
-		ctx,
-		dockerClient,
-		containerID,
-		code,
-	)
+	err = containerManager.CopyFileToContainer(ctx, containerID, containerCodePath, 0644, []byte(code))
 	if err != nil {
 		fmt.Printf("Error copying code to container: %v\n", err)
 		return
 	}
 
-	execResp, err := dockerClient.ContainerExecCreate(
-		ctx,
-		containerID,
-		container.ExecOptions{
-			Cmd:          []string{"g++", containerCodePath, "-o", outputPath, "-static"},
-			AttachStderr: true,
-			AttachStdout: true,
-		},
-	)
+	err = containerManager.StartContainer(ctx, containerID)
 	if err != nil {
-		fmt.Printf("Error creating exec: %v\n", err)
+		fmt.Printf("Error starting container: %v\n", err)
 		return
 	}
 
-	attachResp, err := dockerClient.ContainerExecAttach(
-		ctx,
-		execResp.ID,
-		container.ExecAttachOptions{},
-	)
+	statusCode, err := containerManager.WaitContainer(ctx, containerID)
 	if err != nil {
-		fmt.Printf("Error attaching to exec: %v\n", err)
+		fmt.Printf("Error waiting for container: %v\n", err)
 		return
 	}
-	defer attachResp.Close()
-
-	for {
-		inspectResp, err := dockerClient.ContainerExecInspect(ctx, execResp.ID)
+	if statusCode != 0 {
+		fmt.Printf("Compilation failed with exit code %d\n", statusCode)
+		logs, err := containerManager.ReadLogsFromContainer(ctx, containerID)
 		if err != nil {
-			fmt.Printf("Error inspecting exec: %v\n", err)
-			continue
+			fmt.Printf("Error reading logs from container: %v\n", err)
 		}
-
-		if !inspectResp.Running {
-			if inspectResp.ExitCode != 0 {
-				fmt.Printf("Compilation failed with exit code %d\n", inspectResp.ExitCode)
-			}
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+		fmt.Println(logs)
+		return
 	}
 
-	executableReader, _, err := dockerClient.CopyFromContainer(ctx, containerID, outputPath)
+	executable, err := containerManager.LoadFileFromContainer(ctx, containerID, outputPath)
 	if err != nil {
 		fmt.Printf("Error copying executable: %v\n", err)
-		return
-	}
-	defer executableReader.Close()
-
-	tarReader := tar.NewReader(executableReader)
-	tarReader.Next()
-	executableData, err := io.ReadAll(tarReader)
-	if err != nil {
-		fmt.Printf("Error reading executable: %v\n", err)
 		return
 	}
 
@@ -137,8 +100,8 @@ func handleTaskToCompile(
 		ctx,
 		executablesBucketName,
 		objectName,
-		bytes.NewReader(executableData),
-		int64(len(executableData)),
+		bytes.NewReader(executable),
+		int64(len(executable)),
 		minio.PutObjectOptions{},
 	)
 	if err != nil {
@@ -178,64 +141,4 @@ func loadCodeFromMinio(
 	}
 
 	return string(content), nil
-}
-
-func runContainer(
-	ctx context.Context,
-	dockerClient *client.Client,
-	image string,
-) (string, error) {
-	resp, err := dockerClient.ContainerCreate(
-		ctx,
-		&container.Config{
-			Image: image,
-			Cmd:   []string{"tail", "-f", "/dev/null"},
-		},
-		nil,
-		nil,
-		nil,
-		"",
-	)
-
-	if err != nil {
-		return "", err
-	}
-
-	containerID := resp.ID
-
-	if err := dockerClient.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		return "", err
-	}
-
-	return containerID, nil
-}
-
-func copyCodeToContainer(
-	ctx context.Context,
-	dockerClient *client.Client,
-	containerID string,
-	code string,
-) error {
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	hdr := &tar.Header{
-		Name: containerCodePath,
-		Mode: 0644,
-		Size: int64(len(code)),
-	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		return err
-	}
-	if _, err := tw.Write([]byte(code)); err != nil {
-		return err
-	}
-	tw.Close()
-
-	return dockerClient.CopyToContainer(
-		ctx,
-		containerID,
-		"/",
-		&buf,
-		container.CopyToContainerOptions{},
-	)
 }
