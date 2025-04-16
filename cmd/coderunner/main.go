@@ -56,6 +56,7 @@ func main() {
 			filesManager,
 			containerManager,
 			tasksToTest,
+			redisClient,
 		)
 	}
 

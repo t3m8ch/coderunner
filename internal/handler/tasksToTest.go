@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/t3m8ch/coderunner/internal/containerctl"
 	"github.com/t3m8ch/coderunner/internal/filesctl"
 	"github.com/t3m8ch/coderunner/internal/model"
@@ -16,9 +18,10 @@ func HandleTasksToTest(
 	filesManager filesctl.Manager,
 	containerManager containerctl.Manager,
 	tasksToTest chan model.Task,
+	redisClient *redis.Client,
 ) {
 	for task := range tasksToTest {
-		handleTaskToTest(ctx, filesManager, containerManager, task)
+		handleTaskToTest(ctx, filesManager, containerManager, redisClient, task)
 	}
 }
 
@@ -26,6 +29,7 @@ func handleTaskToTest(
 	ctx context.Context,
 	filesManager filesctl.Manager,
 	containerManager containerctl.Manager,
+	redisClient *redis.Client,
 	task model.Task,
 ) {
 	fmt.Printf("Task to test: %+v\n", task)
@@ -61,6 +65,8 @@ func handleTaskToTest(
 
 	var wg sync.WaitGroup
 	wg.Add(len(tests))
+
+	testsResultsCh := make(chan model.TestResult, len(tests))
 
 	for i := range tests {
 		go func() {
@@ -125,7 +131,9 @@ func handleTaskToTest(
 
 			if statusCode == 0 && output == tests[i].Stdout {
 				fmt.Printf("test #%d: Test passed\n", i)
+				testsResultsCh <- model.TestResult{TaskID: task.ID, TestID: i, Successful: true}
 			} else {
+				testsResultsCh <- model.TestResult{TaskID: task.ID, TestID: i, Successful: false}
 				fmt.Printf("test #%d: Test failed\n", i)
 				fmt.Printf("test #%d: Expected: %s\n", i, tests[i].Stdout)
 				fmt.Printf("test #%d: Actual: %s\n", i, output)
@@ -141,6 +149,27 @@ func handleTaskToTest(
 		}()
 	}
 
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(testsResultsCh)
+	}()
+
+	task.TestsResults = make([]model.TestResult, 0, len(tests))
+	for test := range testsResultsCh {
+		task.TestsResults = append(task.TestsResults, test)
+		jsonBytes, err := json.Marshal(test)
+		if err != nil {
+			fmt.Printf("test #%d: Error marshaling test result: %v\n", test.TestID, err)
+		}
+		redisClient.Publish(ctx, completedTestsChannel, string(jsonBytes))
+	}
+
 	fmt.Println("All tests completed!")
+	fmt.Println(task.TestsResults)
+
+	jsonBytes, err := json.Marshal(task)
+	if err != nil {
+		fmt.Printf("Error marshaling task: %v\n", err)
+	}
+	redisClient.Publish(ctx, completedTasksChannel, string(jsonBytes))
 }
