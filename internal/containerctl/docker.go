@@ -22,8 +22,13 @@ func (m *DockerManager) CreateContainer(ctx context.Context, image string, cmd [
 	resp, err := m.dockerClient.ContainerCreate(
 		ctx,
 		&container.Config{
-			Image: image,
-			Cmd:   cmd,
+			AttachStdin:  true,
+			AttachStdout: true,
+			AttachStderr: true,
+			OpenStdin:    true,
+			StdinOnce:    true,
+			Image:        image,
+			Cmd:          cmd,
 		},
 		nil,
 		nil,
@@ -39,6 +44,19 @@ func (m *DockerManager) CreateContainer(ctx context.Context, image string, cmd [
 
 func (m *DockerManager) StartContainer(ctx context.Context, id ContainerID) error {
 	return m.dockerClient.ContainerStart(ctx, id, container.StartOptions{})
+}
+
+func (m *DockerManager) AttachToContainer(ctx context.Context, id ContainerID) (io.Reader, io.WriteCloser, error) {
+	resp, err := m.dockerClient.ContainerAttach(ctx, id, container.AttachOptions{
+		Stream: true,
+		Stdin:  true,
+		Stdout: true,
+		Stderr: true,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Reader, resp.Conn, nil
 }
 
 func (m *DockerManager) RemoveContainer(ctx context.Context, id ContainerID) error {

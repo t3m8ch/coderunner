@@ -6,4 +6,5 @@ const (
 	compileExecPath = "/app/output"
 	execBucketName  = "executables"
 	testingExecPath = "/app/exec.out"
+	inputFilePath   = "/app/input.txt"
 )
