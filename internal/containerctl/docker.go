@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/docker/docker/api/types/container"
@@ -129,8 +131,36 @@ func (m *DockerManager) ReadLogsFromContainer(ctx context.Context, id ContainerI
 	defer reader.Close()
 
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, reader); err != nil {
-		return "", err
+
+	// Это код, сгенерированный DeepSeek для очистки строки от всякого мусора.
+	// Слава великой китайской абобе!
+
+	// Полный ответ DeepSeek'а по ссылке: https://pastebin.com/UZQadXsf
+
+	// Читаем логи с обработкой Docker-заголовков
+	header := make([]byte, 8)
+	for {
+		// Читаем заголовок
+		_, err := io.ReadFull(reader, header)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("failed to read header: %w", err)
+		}
+
+		// Разбираем размер данных (последние 4 байта заголовка, big-endian)
+		dataSize := binary.BigEndian.Uint32(header[4:8])
+
+		// Читаем данные
+		data := make([]byte, dataSize)
+		_, err = io.ReadFull(reader, data)
+		if err != nil {
+			return "", fmt.Errorf("failed to read data: %w", err)
+		}
+
+		// Записываем данные в буфер
+		buf.Write(data)
 	}
 
 	return buf.String(), nil
