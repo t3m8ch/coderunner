@@ -7,16 +7,16 @@ const (
 
 type StartTaskCommand struct {
 	ID            string        `json:"id"`
-	CodeLocation  MinIOLocation `json:"codeLocation"`
-	TestsLocation MinIOLocation `json:"testsLocation"`
+	CodeLocation  FileLocation `json:"codeLocation"`
+	TestsLocation FileLocation `json:"testsLocation"`
 	Compiler      string        `json:"compiler"`
 }
 
 type Task struct {
 	ID                 string        `json:"id"`
-	CodeLocation       MinIOLocation `json:"codeLocation"`
-	TestsLocation      MinIOLocation `json:"testsLocation"`
-	ExecutableLocation MinIOLocation `json:"executableLocation"`
+	CodeLocation       FileLocation `json:"codeLocation"`
+	TestsLocation      FileLocation `json:"testsLocation"`
+	ExecutableLocation FileLocation `json:"executableLocation"`
 	Compiler           string        `json:"compiler"`
 	State              string        `json:"state"`
 }

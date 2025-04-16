@@ -1,40 +1,38 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 
-	"github.com/minio/minio-go/v7"
 	"github.com/t3m8ch/coderunner/internal/containerctl"
+	"github.com/t3m8ch/coderunner/internal/filesctl"
 	"github.com/t3m8ch/coderunner/internal/model"
 )
 
 func HandleTasksToCompile(
 	ctx context.Context,
-	minioClient *minio.Client,
+	filesManager filesctl.Manager,
 	containerManager containerctl.Manager,
 	tasksToCompile chan model.Task,
 	tasksToTest chan model.Task,
 ) {
 	for task := range tasksToCompile {
-		handleTaskToCompile(ctx, minioClient, containerManager, task, tasksToTest)
+		handleTaskToCompile(ctx, filesManager, containerManager, task, tasksToTest)
 	}
 }
 
 func handleTaskToCompile(
 	ctx context.Context,
-	minioClient *minio.Client,
+	filesManager filesctl.Manager,
 	containerManager containerctl.Manager,
 	task model.Task,
 	tasksToTest chan model.Task,
 ) {
 	fmt.Printf("Task to compile: %+v\n", task)
 
-	code, err := loadCodeFromMinio(ctx, minioClient, &task.CodeLocation)
+	codeBinary, err := filesManager.LoadFile(ctx, task.CodeLocation.BucketName, task.CodeLocation.ObjectName)
 	if err != nil {
-		fmt.Printf("Error loading code from MinIO: %v\n", err)
+		fmt.Printf("Error loading code from file server: %v\n", err)
 		return
 	}
 
@@ -55,7 +53,7 @@ func handleTaskToCompile(
 		}
 	}()
 
-	err = containerManager.CopyFileToContainer(ctx, containerID, sourceFilePath, 0644, []byte(code))
+	err = containerManager.CopyFileToContainer(ctx, containerID, sourceFilePath, 0644, codeBinary)
 	if err != nil {
 		fmt.Printf("Error copying code to container: %v\n", err)
 		return
@@ -90,49 +88,21 @@ func handleTaskToCompile(
 
 	objectName := fmt.Sprintf("%s.out", task.ID)
 
-	_, err = minioClient.PutObject(
+	err = filesManager.PutFile(
 		ctx,
 		execBucketName,
 		objectName,
-		bytes.NewReader(executable),
-		int64(len(executable)),
-		minio.PutObjectOptions{},
+		executable,
 	)
 	if err != nil {
-		fmt.Printf("Error put object to minio: %v\n", err)
+		fmt.Printf("Error put object to file server: %v\n", err)
 		return
 	}
 
 	task.State = model.TestingTaskState
-	task.ExecutableLocation = model.MinIOLocation{
+	task.ExecutableLocation = model.FileLocation{
 		BucketName: execBucketName,
 		ObjectName: objectName,
 	}
 	tasksToTest <- task
-}
-
-func loadCodeFromMinio(
-	ctx context.Context,
-	minioClient *minio.Client,
-	location *model.MinIOLocation,
-) (string, error) {
-	obj, err := minioClient.GetObject(
-		ctx,
-		location.BucketName,
-		location.ObjectName,
-		minio.GetObjectOptions{},
-	)
-	if err != nil {
-		fmt.Printf("Error getting object: %v\n", err)
-		return "", err
-	}
-	defer obj.Close()
-
-	content, err := io.ReadAll(obj)
-	if err != nil {
-		fmt.Printf("Error reading object: %v\n", err)
-		return "", err
-	}
-
-	return string(content), nil
 }

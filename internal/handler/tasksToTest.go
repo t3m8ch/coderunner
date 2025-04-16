@@ -81,7 +81,7 @@ func handleTaskToTest(
 func loadBinaryFromMinio(
 	ctx context.Context,
 	minioClient *minio.Client,
-	location *model.MinIOLocation,
+	location *model.FileLocation,
 ) ([]byte, error) {
 	obj, err := minioClient.GetObject(
 		ctx,

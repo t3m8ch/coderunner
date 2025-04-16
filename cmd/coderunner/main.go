@@ -11,6 +11,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/redis/go-redis/v9"
 	"github.com/t3m8ch/coderunner/internal/containerctl"
+	"github.com/t3m8ch/coderunner/internal/filesctl"
 	"github.com/t3m8ch/coderunner/internal/handler"
 	"github.com/t3m8ch/coderunner/internal/model"
 )
@@ -32,6 +33,7 @@ func main() {
 	}
 
 	containerManager := containerctl.NewDockerManager(dockerClient)
+	fileManager := filesctl.NewMinioManager(minioClient)
 
 	tasksToCompile := make(chan model.Task, 100)
 	tasksToTest := make(chan model.Task, 100)
@@ -41,7 +43,7 @@ func main() {
 	for range 5 {
 		go handler.HandleTasksToCompile(
 			ctx,
-			minioClient,
+			fileManager,
 			containerManager,
 			tasksToCompile,
 			tasksToTest,
