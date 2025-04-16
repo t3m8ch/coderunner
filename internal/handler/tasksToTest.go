@@ -3,33 +3,36 @@ package handler
 import (
 	"context"
 	"fmt"
-	"io"
 
-	"github.com/minio/minio-go/v7"
 	"github.com/t3m8ch/coderunner/internal/containerctl"
+	"github.com/t3m8ch/coderunner/internal/filesctl"
 	"github.com/t3m8ch/coderunner/internal/model"
 )
 
 func HandleTasksToTest(
 	ctx context.Context,
-	minioClient *minio.Client,
+	filesManager filesctl.Manager,
 	containerManager containerctl.Manager,
 	tasksToTest chan model.Task,
 ) {
 	for task := range tasksToTest {
-		handleTaskToTest(ctx, minioClient, containerManager, task)
+		handleTaskToTest(ctx, filesManager, containerManager, task)
 	}
 }
 
 func handleTaskToTest(
 	ctx context.Context,
-	minioClient *minio.Client,
+	filesManager filesctl.Manager,
 	containerManager containerctl.Manager,
 	task model.Task,
 ) {
 	fmt.Printf("Task to test: %+v\n", task)
 
-	executable, err := loadBinaryFromMinio(ctx, minioClient, &task.ExecutableLocation)
+	executable, err := filesManager.LoadFile(
+		ctx,
+		task.ExecutableLocation.BucketName,
+		task.ExecutableLocation.ObjectName,
+	)
 	if err != nil {
 		fmt.Printf("Error loading executable from MinIO: %v\n", err)
 		return
@@ -90,30 +93,4 @@ func handleTaskToTest(
 	fmt.Println(output)
 
 	fmt.Printf("Testing completed with exit code %d\n", statusCode)
-}
-
-func loadBinaryFromMinio(
-	ctx context.Context,
-	minioClient *minio.Client,
-	location *model.FileLocation,
-) ([]byte, error) {
-	obj, err := minioClient.GetObject(
-		ctx,
-		location.BucketName,
-		location.ObjectName,
-		minio.GetObjectOptions{},
-	)
-	if err != nil {
-		fmt.Printf("Error getting object: %v\n", err)
-		return nil, err
-	}
-	defer obj.Close()
-
-	content, err := io.ReadAll(obj)
-	if err != nil {
-		fmt.Printf("Error reading object: %v\n", err)
-		return nil, err
-	}
-
-	return content, nil
 }

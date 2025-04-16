@@ -33,7 +33,7 @@ func main() {
 	}
 
 	containerManager := containerctl.NewDockerManager(dockerClient)
-	fileManager := filesctl.NewMinioManager(minioClient)
+	filesManager := filesctl.NewMinioManager(minioClient)
 
 	tasksToCompile := make(chan model.Task, 100)
 	tasksToTest := make(chan model.Task, 100)
@@ -43,7 +43,7 @@ func main() {
 	for range 5 {
 		go handler.HandleTasksToCompile(
 			ctx,
-			fileManager,
+			filesManager,
 			containerManager,
 			tasksToCompile,
 			tasksToTest,
@@ -53,7 +53,7 @@ func main() {
 	for range 3 {
 		go handler.HandleTasksToTest(
 			ctx,
-			minioClient,
+			filesManager,
 			containerManager,
 			tasksToTest,
 		)
