@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/t3m8ch/coderunner/internal/containerctl"
 	"github.com/t3m8ch/coderunner/internal/filesctl"
@@ -58,78 +59,88 @@ func handleTaskToTest(
 	}
 	fmt.Println("Tests parsed")
 
+	var wg sync.WaitGroup
+	wg.Add(len(tests))
+
 	for i := range tests {
-		fmt.Printf("Test #%d\n", i)
+		go func() {
+			defer wg.Done()
 
-		containerID, err := containerManager.CreateContainer(
-			ctx,
-			"debian:bookworm",
-			[]string{"sh", "-c", fmt.Sprintf("%s < %s", testingExecPath, inputFilePath)},
-		)
-		if err != nil {
-			fmt.Printf("Error creating container: %v\n", err)
-			return
-		}
-		fmt.Println("Container created")
+			fmt.Printf("----- Test #%d ----- \n", i)
 
-		err = containerManager.CopyFileToContainer(ctx, containerID, testingExecPath, 0700, executable)
-		if err != nil {
-			fmt.Printf("Error copying executable to container: %v\n", err)
-			return
-		}
-		fmt.Println("Executable copied to container")
+			containerID, err := containerManager.CreateContainer(
+				ctx,
+				"debian:bookworm",
+				[]string{"sh", "-c", fmt.Sprintf("%s < %s", testingExecPath, inputFilePath)},
+			)
+			if err != nil {
+				fmt.Printf("test #%d: Error creating container: %v\n", i, err)
+				return
+			}
+			fmt.Printf("test #%d: Container created\n", i)
 
-		err = containerManager.CopyFileToContainer(ctx, containerID, inputFilePath, 0644, []byte(tests[i].Stdin))
-		if err != nil {
-			fmt.Printf("Error copying input data: %v\n", err)
-			return
-		}
+			err = containerManager.CopyFileToContainer(ctx, containerID, testingExecPath, 0700, executable)
+			if err != nil {
+				fmt.Printf("test #%d: Error copying executable to container: %v\n", i, err)
+				return
+			}
+			fmt.Printf("test #%d: Executable copied to container\n", i)
 
-		err = containerManager.StartContainer(ctx, containerID)
-		if err != nil {
-			fmt.Printf("Error starting container: %v\n", err)
-			return
-		}
-		fmt.Println("Container started")
+			err = containerManager.CopyFileToContainer(ctx, containerID, inputFilePath, 0644, []byte(tests[i].Stdin))
+			if err != nil {
+				fmt.Printf("test #%d: Error copying input data: %v\n", i, err)
+				return
+			}
 
-		statusCode, err := containerManager.WaitContainer(ctx, containerID)
-		if err != nil {
-			fmt.Printf("Error waiting for container: %v\n", err)
-			return
-		}
+			err = containerManager.StartContainer(ctx, containerID)
+			if err != nil {
+				fmt.Printf("test #%d: Error starting container: %v\n", i, err)
+				return
+			}
+			fmt.Printf("test #%d: Container started\n", i)
 
-		output, err := containerManager.ReadLogsFromContainer(ctx, containerID)
-		if err != nil {
-			fmt.Printf("Error reading logs from container: %v\n", err)
-			return
-		}
-		fmt.Println("Output read from container")
-		fmt.Println(output)
+			statusCode, err := containerManager.WaitContainer(ctx, containerID)
+			if err != nil {
+				fmt.Printf("test #%d: Error waiting for container: %v\n", i, err)
+				return
+			}
 
-		fmt.Printf("Testing completed with exit code %d\n", statusCode)
+			output, err := containerManager.ReadLogsFromContainer(ctx, containerID)
+			if err != nil {
+				fmt.Printf("test #%d: Error reading logs from container: %v\n", i, err)
+				return
+			}
+			fmt.Printf("test #%d: Output read from container\n", i)
+			fmt.Printf("test #%d: %s", i, output)
 
-		output = strings.Trim(output, " ")
-		output = strings.Trim(output, "\n")
-		output = strings.Trim(output, "\t")
+			fmt.Printf("test #%d: Testing completed with exit code %d\n", i, statusCode)
 
-		tests[i].Stdout = strings.Trim(output, " ")
-		tests[i].Stdout = strings.Trim(output, "\n")
-		tests[i].Stdout = strings.Trim(output, "\t")
+			output = strings.Trim(output, " ")
+			output = strings.Trim(output, "\n")
+			output = strings.Trim(output, "\t")
 
-		if statusCode == 0 && output == tests[i].Stdout {
-			fmt.Println("Test passed")
-		} else {
-			fmt.Println("Test failed")
-			fmt.Printf("Expected: %s\n", tests[i].Stdout)
-			fmt.Printf("Actual: %s\n", output)
-			fmt.Printf("Expected bytes: %q\n", []byte(tests[i].Stdout))
-			fmt.Printf("Actual bytes:   %q\n", []byte(output))
-		}
+			tests[i].Stdout = strings.Trim(output, " ")
+			tests[i].Stdout = strings.Trim(output, "\n")
+			tests[i].Stdout = strings.Trim(output, "\t")
 
-		err = containerManager.RemoveContainer(ctx, containerID)
-		if err != nil {
-			fmt.Printf("Error container removing: %v\n", err)
-		}
-		fmt.Println("Container removed")
+			if statusCode == 0 && output == tests[i].Stdout {
+				fmt.Printf("test #%d: Test passed\n", i)
+			} else {
+				fmt.Printf("test #%d: Test failed\n", i)
+				fmt.Printf("test #%d: Expected: %s\n", i, tests[i].Stdout)
+				fmt.Printf("test #%d: Actual: %s\n", i, output)
+				fmt.Printf("test #%d: Expected bytes: %q\n", i, []byte(tests[i].Stdout))
+				fmt.Printf("test #%d: Actual bytes:   %q\n", i, []byte(output))
+			}
+
+			err = containerManager.RemoveContainer(ctx, containerID)
+			if err != nil {
+				fmt.Printf("test #%d: Error container removing: %v\n", i, err)
+			}
+			fmt.Printf("test #%d: Container removed\n", i)
+		}()
 	}
+
+	wg.Wait()
+	fmt.Println("All tests completed!")
 }
