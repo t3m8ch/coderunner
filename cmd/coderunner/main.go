@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/docker/docker/client"
 	"github.com/minio/minio-go/v7"
@@ -32,7 +33,10 @@ func main() {
 		panic(err)
 	}
 
-	containerManager := containerctl.NewDockerManager(dockerClient)
+	var containerManager containerctl.Manager
+	containerManager = containerctl.NewDockerManager(dockerClient)
+	containerManager = containerctl.NewRetryDecorator(containerManager, 3, 2*time.Second)
+	containerManager = containerctl.NewConcurrencyLimitDecorator(containerManager, 5)
 	filesManager := filesctl.NewMinioManager(minioClient)
 
 	tasksToCompile := make(chan model.Task, 100)
