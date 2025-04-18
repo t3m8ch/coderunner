@@ -2,7 +2,13 @@ package model
 
 import "encoding/json"
 
+type TestDTO struct {
+	Stdin  string `json:"stdin"`
+	Stdout string `json:"stdout"`
+}
+
 type Test struct {
+	ID     int    `json:"id"`
 	Stdin  string `json:"stdin"`
 	Stdout string `json:"stdout"`
 }
@@ -13,8 +19,8 @@ type TestResult struct {
 	Successful bool   `json:"successful"`
 }
 
-func ParseTestsJSON(data []byte) ([]Test, error) {
-	var tests []Test
+func ParseTestsJSON(data []byte) ([]TestDTO, error) {
+	var tests []TestDTO
 	err := json.Unmarshal(data, &tests)
 	return tests, err
 }

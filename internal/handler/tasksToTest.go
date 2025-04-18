@@ -66,13 +66,32 @@ func handleTaskToTest(
 	var wg sync.WaitGroup
 	wg.Add(len(tests))
 
+	testsCh := make(chan model.Test, 20)
 	testsResultsCh := make(chan model.TestResult, len(tests))
 
-	for i := range tests {
+	go func() {
+		for i := range tests {
+			testsCh <- model.Test{
+				ID:     i,
+				Stdin:  tests[i].Stdin,
+				Stdout: tests[i].Stdout,
+			}
+		}
+	}()
+
+	go func() {
+		fmt.Println("Waiting...")
+		wg.Wait()
+		fmt.Println("Done! Closing testsResultsCh and testsCh")
+		close(testsResultsCh)
+		close(testsCh)
+	}()
+
+	for test := range testsCh {
 		go func() {
 			defer wg.Done()
 
-			fmt.Printf("----- Test #%d ----- \n", i)
+			fmt.Printf("----- Test #%d ----- \n", test.ID)
 
 			sandboxID, err := sandboxManager.CreateSandbox(
 				ctx,
@@ -80,79 +99,74 @@ func handleTaskToTest(
 				[]string{"sh", "-c", fmt.Sprintf("%s < %s", testingExecPath, inputFilePath)},
 			)
 			if err != nil {
-				fmt.Printf("test #%d: Error creating sandbox: %v\n", i, err)
+				fmt.Printf("test #%d: Error creating sandbox: %v\n", test.ID, err)
 				return
 			}
-			fmt.Printf("test #%d: Sandbox created\n", i)
+			fmt.Printf("test #%d: Sandbox created\n", test.ID)
 
 			err = sandboxManager.CopyFileToSandbox(ctx, sandboxID, testingExecPath, 0700, executable)
 			if err != nil {
-				fmt.Printf("test #%d: Error copying executable to sandbox: %v\n", i, err)
+				fmt.Printf("test #%d: Error copying executable to sandbox: %v\n", test.ID, err)
 				return
 			}
-			fmt.Printf("test #%d: Executable copied to sandbox\n", i)
+			fmt.Printf("test #%d: Executable copied to sandbox\n", test.ID)
 
-			err = sandboxManager.CopyFileToSandbox(ctx, sandboxID, inputFilePath, 0644, []byte(tests[i].Stdin))
+			err = sandboxManager.CopyFileToSandbox(ctx, sandboxID, inputFilePath, 0644, []byte(test.Stdin))
 			if err != nil {
-				fmt.Printf("test #%d: Error copying input data: %v\n", i, err)
+				fmt.Printf("test #%d: Error copying input data: %v\n", test.ID, err)
 				return
 			}
 
 			err = sandboxManager.StartSandbox(ctx, sandboxID)
 			if err != nil {
-				fmt.Printf("test #%d: Error starting sandbox: %v\n", i, err)
+				fmt.Printf("test #%d: Error starting sandbox: %v\n", test.ID, err)
 				return
 			}
-			fmt.Printf("test #%d: Sandbox started\n", i)
+			fmt.Printf("test #%d: Sandbox started\n", test.ID)
 
 			statusCode, err := sandboxManager.WaitSandbox(ctx, sandboxID)
 			if err != nil {
-				fmt.Printf("test #%d: Error waiting for sandbox: %v\n", i, err)
+				fmt.Printf("test #%d: Error waiting for sandbox: %v\n", test.ID, err)
 				return
 			}
 
 			output, err := sandboxManager.ReadLogsFromSandbox(ctx, sandboxID)
 			if err != nil {
-				fmt.Printf("test #%d: Error reading logs from sandbox: %v\n", i, err)
+				fmt.Printf("test #%d: Error reading logs from sandbox: %v\n", test.ID, err)
 				return
 			}
-			fmt.Printf("test #%d: Output read from sandbox\n", i)
-			fmt.Printf("test #%d: %s", i, output)
+			fmt.Printf("test #%d: Output read from sandbox\n", test.ID)
+			fmt.Printf("test #%d: %s", test.ID, output)
 
-			fmt.Printf("test #%d: Testing completed with exit code %d\n", i, statusCode)
+			fmt.Printf("test #%d: Testing completed with exit code %d\n", test.ID, statusCode)
 
 			output = strings.Trim(output, " ")
 			output = strings.Trim(output, "\n")
 			output = strings.Trim(output, "\t")
 
-			tests[i].Stdout = strings.Trim(output, " ")
-			tests[i].Stdout = strings.Trim(output, "\n")
-			tests[i].Stdout = strings.Trim(output, "\t")
+			test.Stdout = strings.Trim(output, " ")
+			test.Stdout = strings.Trim(output, "\n")
+			test.Stdout = strings.Trim(output, "\t")
 
-			if statusCode == 0 && output == tests[i].Stdout {
-				fmt.Printf("test #%d: Test passed\n", i)
-				testsResultsCh <- model.TestResult{TaskID: task.ID, TestID: i, Successful: true}
+			if statusCode == 0 && output == test.Stdout {
+				fmt.Printf("test #%d: Test passed\n", test.ID)
+				testsResultsCh <- model.TestResult{TaskID: task.ID, TestID: test.ID, Successful: true}
 			} else {
-				testsResultsCh <- model.TestResult{TaskID: task.ID, TestID: i, Successful: false}
-				fmt.Printf("test #%d: Test failed\n", i)
-				fmt.Printf("test #%d: Expected: %s\n", i, tests[i].Stdout)
-				fmt.Printf("test #%d: Actual: %s\n", i, output)
-				fmt.Printf("test #%d: Expected bytes: %q\n", i, []byte(tests[i].Stdout))
-				fmt.Printf("test #%d: Actual bytes:   %q\n", i, []byte(output))
+				testsResultsCh <- model.TestResult{TaskID: task.ID, TestID: test.ID, Successful: false}
+				fmt.Printf("test #%d: Test failed\n", test.ID)
+				fmt.Printf("test #%d: Expected: %s\n", test.ID, test.Stdout)
+				fmt.Printf("test #%d: Actual: %s\n", test.ID, output)
+				fmt.Printf("test #%d: Expected bytes: %q\n", test.ID, []byte(test.Stdout))
+				fmt.Printf("test #%d: Actual bytes:   %q\n", test.ID, []byte(output))
 			}
 
 			err = sandboxManager.RemoveSandbox(ctx, sandboxID)
 			if err != nil {
-				fmt.Printf("test #%d: Error sandbox removing: %v\n", i, err)
+				fmt.Printf("test #%d: Error sandbox removing: %v\n", test.ID, err)
 			}
-			fmt.Printf("test #%d: Sandbox removed\n", i)
+			fmt.Printf("test #%d: Sandbox removed\n", test.ID)
 		}()
 	}
-
-	go func() {
-		wg.Wait()
-		close(testsResultsCh)
-	}()
 
 	task.TestsResults = make([]model.TestResult, 0, len(tests))
 	for test := range testsResultsCh {
