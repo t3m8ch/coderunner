@@ -1,4 +1,4 @@
-package containerctl
+package sandbox
 
 import (
 	"context"
@@ -44,11 +44,11 @@ func isRetryable(err error) bool {
 	return err != context.Canceled && err != context.DeadlineExceeded
 }
 
-func (d *RetryDecorator) CreateContainer(ctx context.Context, image string, cmd []string) (ContainerID, error) {
-	var id ContainerID
+func (d *RetryDecorator) CreateSandbox(ctx context.Context, image string, cmd []string) (SandboxID, error) {
+	var id SandboxID
 	var err error
 	fn := func() error {
-		id, err = d.manager.CreateContainer(ctx, image, cmd)
+		id, err = d.manager.CreateSandbox(ctx, image, cmd)
 		return err
 	}
 	if err := d.retry(ctx, fn); err != nil {
@@ -57,19 +57,19 @@ func (d *RetryDecorator) CreateContainer(ctx context.Context, image string, cmd 
 	return id, nil
 }
 
-func (d *RetryDecorator) StartContainer(ctx context.Context, id ContainerID) error {
+func (d *RetryDecorator) StartSandbox(ctx context.Context, id SandboxID) error {
 	fn := func() error {
-		return d.manager.StartContainer(ctx, id)
+		return d.manager.StartSandbox(ctx, id)
 	}
 	return d.retry(ctx, fn)
 }
 
-func (d *RetryDecorator) AttachToContainer(ctx context.Context, id ContainerID) (io.Reader, io.WriteCloser, error) {
+func (d *RetryDecorator) AttachToSandbox(ctx context.Context, id SandboxID) (io.Reader, io.WriteCloser, error) {
 	var reader io.Reader
 	var writer io.WriteCloser
 	var err error
 	fn := func() error {
-		reader, writer, err = d.manager.AttachToContainer(ctx, id)
+		reader, writer, err = d.manager.AttachToSandbox(ctx, id)
 		return err
 	}
 	if err := d.retry(ctx, fn); err != nil {
@@ -78,25 +78,25 @@ func (d *RetryDecorator) AttachToContainer(ctx context.Context, id ContainerID) 
 	return reader, writer, nil
 }
 
-func (d *RetryDecorator) RemoveContainer(ctx context.Context, id ContainerID) error {
+func (d *RetryDecorator) RemoveSandbox(ctx context.Context, id SandboxID) error {
 	fn := func() error {
-		return d.manager.RemoveContainer(ctx, id)
+		return d.manager.RemoveSandbox(ctx, id)
 	}
 	return d.retry(ctx, fn)
 }
 
-func (d *RetryDecorator) CopyFileToContainer(ctx context.Context, id ContainerID, path string, mode int64, data []byte) error {
+func (d *RetryDecorator) CopyFileToSandbox(ctx context.Context, id SandboxID, path string, mode int64, data []byte) error {
 	fn := func() error {
-		return d.manager.CopyFileToContainer(ctx, id, path, mode, data)
+		return d.manager.CopyFileToSandbox(ctx, id, path, mode, data)
 	}
 	return d.retry(ctx, fn)
 }
 
-func (d *RetryDecorator) LoadFileFromContainer(ctx context.Context, id ContainerID, path string) ([]byte, error) {
+func (d *RetryDecorator) LoadFileFromSandbox(ctx context.Context, id SandboxID, path string) ([]byte, error) {
 	var data []byte
 	var err error
 	fn := func() error {
-		data, err = d.manager.LoadFileFromContainer(ctx, id, path)
+		data, err = d.manager.LoadFileFromSandbox(ctx, id, path)
 		return err
 	}
 	if err := d.retry(ctx, fn); err != nil {
@@ -105,11 +105,11 @@ func (d *RetryDecorator) LoadFileFromContainer(ctx context.Context, id Container
 	return data, nil
 }
 
-func (d *RetryDecorator) WaitContainer(ctx context.Context, id ContainerID) (StatusCode, error) {
+func (d *RetryDecorator) WaitSandbox(ctx context.Context, id SandboxID) (StatusCode, error) {
 	var code StatusCode
 	var err error
 	fn := func() error {
-		code, err = d.manager.WaitContainer(ctx, id)
+		code, err = d.manager.WaitSandbox(ctx, id)
 		return err
 	}
 	if err := d.retry(ctx, fn); err != nil {
@@ -118,11 +118,11 @@ func (d *RetryDecorator) WaitContainer(ctx context.Context, id ContainerID) (Sta
 	return code, nil
 }
 
-func (d *RetryDecorator) ReadLogsFromContainer(ctx context.Context, id ContainerID) (string, error) {
+func (d *RetryDecorator) ReadLogsFromSandbox(ctx context.Context, id SandboxID) (string, error) {
 	var logs string
 	var err error
 	fn := func() error {
-		logs, err = d.manager.ReadLogsFromContainer(ctx, id)
+		logs, err = d.manager.ReadLogsFromSandbox(ctx, id)
 		return err
 	}
 	if err := d.retry(ctx, fn); err != nil {

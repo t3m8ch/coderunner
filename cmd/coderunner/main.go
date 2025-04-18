@@ -11,10 +11,10 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/redis/go-redis/v9"
-	"github.com/t3m8ch/coderunner/internal/containerctl"
 	"github.com/t3m8ch/coderunner/internal/filesctl"
 	"github.com/t3m8ch/coderunner/internal/handler"
 	"github.com/t3m8ch/coderunner/internal/model"
+	"github.com/t3m8ch/coderunner/internal/sandbox"
 )
 
 func main() {
@@ -33,10 +33,10 @@ func main() {
 		panic(err)
 	}
 
-	var containerManager containerctl.Manager
-	containerManager = containerctl.NewDockerManager(dockerClient)
-	containerManager = containerctl.NewRetryDecorator(containerManager, 3, 2*time.Second)
-	containerManager = containerctl.NewConcurrencyLimitDecorator(containerManager, 5)
+	var containerManager sandbox.Manager
+	containerManager = sandbox.NewDockerManager(dockerClient)
+	containerManager = sandbox.NewRetryDecorator(containerManager, 3, 2*time.Second)
+	containerManager = sandbox.NewConcurrencyLimitDecorator(containerManager, 5)
 	filesManager := filesctl.NewMinioManager(minioClient)
 
 	tasksToCompile := make(chan model.Task, 100)
