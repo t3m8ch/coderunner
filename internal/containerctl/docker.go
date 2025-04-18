@@ -1,26 +1,37 @@
 package containerctl
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	docker "github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 )
 
 type DockerManager struct {
 	dockerClient *docker.Client
+	cmd          []string
+	execIDs      map[ContainerID]string
+	execOutputs  map[ContainerID]string
+	outputReady  map[ContainerID]chan struct{}
 }
 
 func NewDockerManager(dockerClient *docker.Client) *DockerManager {
-	return &DockerManager{dockerClient}
+	return &DockerManager{
+		dockerClient: dockerClient,
+		cmd:          make([]string, 0),
+		execIDs:      make(map[ContainerID]string),
+		execOutputs:  make(map[ContainerID]string),
+		outputReady:  make(map[ContainerID]chan struct{}),
+	}
 }
 
 func (m *DockerManager) CreateContainer(ctx context.Context, image string, cmd []string) (ContainerID, error) {
+	m.cmd = cmd
 	resp, err := m.dockerClient.ContainerCreate(
 		ctx,
 		&container.Config{
@@ -30,9 +41,17 @@ func (m *DockerManager) CreateContainer(ctx context.Context, image string, cmd [
 			OpenStdin:    true,
 			StdinOnce:    true,
 			Image:        image,
-			Cmd:          cmd,
+			Cmd:          []string{"tail", "-f", "/dev/null"},
 		},
-		nil,
+		&container.HostConfig{
+			Tmpfs: map[string]string{
+				"/app": "rw,exec,nosuid,size=65536k",
+				"/tmp": "rw,exec,nosuid,size=65536k",
+			},
+			LogConfig: container.LogConfig{
+				Type: "none",
+			},
+		},
 		nil,
 		nil,
 		"",
@@ -41,11 +60,49 @@ func (m *DockerManager) CreateContainer(ctx context.Context, image string, cmd [
 		return "", err
 	}
 
+	err = m.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{})
+	if err != nil {
+		return "", err
+	}
+
 	return resp.ID, nil
 }
 
 func (m *DockerManager) StartContainer(ctx context.Context, id ContainerID) error {
-	return m.dockerClient.ContainerStart(ctx, id, container.StartOptions{})
+	execConfig := container.ExecOptions{
+		AttachStdout: true,
+		AttachStderr: true,
+		Cmd:          m.cmd,
+	}
+	execResp, err := m.dockerClient.ContainerExecCreate(ctx, string(id), execConfig)
+	if err != nil {
+		return err
+	}
+
+	m.execIDs[id] = execResp.ID
+	m.outputReady[id] = make(chan struct{})
+
+	attachResp, err := m.dockerClient.ContainerExecAttach(
+		ctx,
+		execResp.ID,
+		container.ExecAttachOptions{},
+	)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		var buf bytes.Buffer
+		_, err := io.Copy(&buf, attachResp.Reader)
+		if err != nil && err != io.EOF {
+			// Логирование ошибки, если требуется
+		}
+		m.execOutputs[id] = buf.String()
+		close(m.outputReady[id])
+		attachResp.Close()
+	}()
+
+	return nil
 }
 
 func (m *DockerManager) AttachToContainer(ctx context.Context, id ContainerID) (io.Reader, io.WriteCloser, error) {
@@ -66,102 +123,128 @@ func (m *DockerManager) RemoveContainer(ctx context.Context, id ContainerID) err
 }
 
 func (m *DockerManager) CopyFileToContainer(ctx context.Context, id ContainerID, path string, mode int64, data []byte) error {
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	hdr := &tar.Header{
-		Name: path,
-		Mode: mode,
-		Size: int64(len(data)),
-	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		return err
-	}
-	if _, err := tw.Write(data); err != nil {
-		return err
-	}
-	tw.Close()
+	// Convert mode to octal string for chmod
+	modeStr := fmt.Sprintf("%o", mode)
 
-	return m.dockerClient.CopyToContainer(
-		ctx,
-		id,
-		"/",
-		&buf,
-		container.CopyToContainerOptions{},
-	)
+	// Create exec config
+	execConfig := container.ExecOptions{
+		AttachStdin:  true,
+		AttachStdout: false,
+		AttachStderr: false,
+		Tty:          false,
+		Cmd:          []string{"/bin/sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\" && chmod $2 \"$1\"", "-", path, modeStr},
+		// Cmd: []string{"ls"},
+	}
+
+	// Create exec instance
+	execResp, err := m.dockerClient.ContainerExecCreate(ctx, id, execConfig)
+	if err != nil {
+		return err
+	}
+	fmt.Println("Container exec created")
+
+	// Attach to exec instance with stdin
+	attachResp, err := m.dockerClient.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{
+		Detach: false,
+	})
+	if err != nil {
+		return err
+	}
+	defer attachResp.Close()
+	fmt.Println("Container exec attached")
+
+	// Write the byte array to stdin
+	_, err = io.Copy(attachResp.Conn, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	fmt.Println("Container exec data written")
+
+	// Close stdin to signal EOF
+	err = attachResp.Conn.Close()
+	if err != nil {
+		return err
+	}
+	fmt.Println("Container exec stdin closed")
+
+	// Wait for exec to finish
+	for {
+		inspect, err := m.dockerClient.ContainerExecInspect(ctx, execResp.ID)
+		if err != nil {
+			return err
+		}
+		if !inspect.Running {
+			if inspect.ExitCode != 0 {
+				return fmt.Errorf("failed to write file: exit code %d", inspect.ExitCode)
+			}
+			fmt.Println("Container exec finished")
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (m *DockerManager) LoadFileFromContainer(ctx context.Context, id ContainerID, path string) ([]byte, error) {
-	reader, _, err := m.dockerClient.CopyFromContainer(ctx, id, path)
+	execConfig := container.ExecOptions{
+		AttachStdout: true,
+		AttachStderr: true,
+		Cmd:          []string{"cat", path},
+	}
+	execResp, err := m.dockerClient.ContainerExecCreate(ctx, string(id), execConfig)
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
-
-	tarReader := tar.NewReader(reader)
-	tarReader.Next()
-	data, err := io.ReadAll(tarReader)
+	attachResp, err := m.dockerClient.ContainerExecAttach(ctx, execResp.ID, container.ExecStartOptions{})
 	if err != nil {
 		return nil, err
 	}
-
-	return data, nil
+	defer attachResp.Close()
+	var stdout, stderr bytes.Buffer
+	_, err = stdcopy.StdCopy(&stdout, &stderr, attachResp.Reader)
+	if err != nil {
+		return nil, err
+	}
+	inspectResp, err := m.dockerClient.ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		return nil, err
+	}
+	if inspectResp.ExitCode != 0 {
+		return nil, fmt.Errorf("failed to read file: exit code %d, stderr: %s", inspectResp.ExitCode, stderr.String())
+	}
+	return stdout.Bytes(), nil
 }
 
 func (m *DockerManager) WaitContainer(ctx context.Context, id ContainerID) (StatusCode, error) {
-	statusCh, errCh := m.dockerClient.ContainerWait(ctx, id, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		return -1, err
-	case status := <-statusCh:
-		return status.StatusCode, nil
+	execID, ok := m.execIDs[id]
+	if !ok {
+		return -1, fmt.Errorf("no exec ID found for container %s", id)
+	}
+
+	for {
+		execInspect, err := m.dockerClient.ContainerExecInspect(ctx, execID)
+		if err != nil {
+			return -1, err
+		}
+		if !execInspect.Running {
+			return int64(execInspect.ExitCode), nil
+		}
+		time.Sleep(100 * time.Millisecond) // Wait a short time before checking again
 	}
 }
 
 func (m *DockerManager) ReadLogsFromContainer(ctx context.Context, id ContainerID) (string, error) {
-	reader, err := m.dockerClient.ContainerLogs(ctx, id, container.LogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-		Timestamps: false,
-		Details:    false,
-		Follow:     false,
-	})
-	if err != nil {
-		return "", err
+	readyCh, ok := m.outputReady[id]
+	if !ok {
+		return "", fmt.Errorf("no output ready for container %s", id)
 	}
-	defer reader.Close()
-
-	var buf bytes.Buffer
-
-	// Это код, сгенерированный DeepSeek для очистки строки от всякого мусора.
-	// Слава великой китайской абобе!
-
-	// Полный ответ DeepSeek'а по ссылке: https://pastebin.com/UZQadXsf
-
-	// Читаем логи с обработкой Docker-заголовков
-	header := make([]byte, 8)
-	for {
-		// Читаем заголовок
-		_, err := io.ReadFull(reader, header)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", fmt.Errorf("failed to read header: %w", err)
+	select {
+	case <-readyCh:
+		output, ok := m.execOutputs[id]
+		if !ok {
+			return "", fmt.Errorf("no output for container %s", id)
 		}
-
-		// Разбираем размер данных (последние 4 байта заголовка, big-endian)
-		dataSize := binary.BigEndian.Uint32(header[4:8])
-
-		// Читаем данные
-		data := make([]byte, dataSize)
-		_, err = io.ReadFull(reader, data)
-		if err != nil {
-			return "", fmt.Errorf("failed to read data: %w", err)
-		}
-
-		// Записываем данные в буфер
-		buf.Write(data)
+		return output, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
-
-	return buf.String(), nil
 }
