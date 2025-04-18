@@ -1,4 +1,4 @@
-package containerctl
+package sandbox
 
 import (
 	"bytes"
@@ -15,22 +15,22 @@ import (
 type DockerManager struct {
 	dockerClient *docker.Client
 	cmd          []string
-	execIDs      map[ContainerID]string
-	execOutputs  map[ContainerID]string
-	outputReady  map[ContainerID]chan struct{}
+	execIDs      map[SandboxID]string
+	execOutputs  map[SandboxID]string
+	outputReady  map[SandboxID]chan struct{}
 }
 
-func NewDockerManager(dockerClient *docker.Client) *DockerManager {
+func NewDockerManager(dockerClient *docker.Client) Manager {
 	return &DockerManager{
 		dockerClient: dockerClient,
 		cmd:          make([]string, 0),
-		execIDs:      make(map[ContainerID]string),
-		execOutputs:  make(map[ContainerID]string),
-		outputReady:  make(map[ContainerID]chan struct{}),
+		execIDs:      make(map[SandboxID]string),
+		execOutputs:  make(map[SandboxID]string),
+		outputReady:  make(map[SandboxID]chan struct{}),
 	}
 }
 
-func (m *DockerManager) CreateContainer(ctx context.Context, image string, cmd []string) (ContainerID, error) {
+func (m *DockerManager) CreateSandbox(ctx context.Context, image string, cmd []string) (SandboxID, error) {
 	m.cmd = cmd
 	resp, err := m.dockerClient.ContainerCreate(
 		ctx,
@@ -68,7 +68,7 @@ func (m *DockerManager) CreateContainer(ctx context.Context, image string, cmd [
 	return resp.ID, nil
 }
 
-func (m *DockerManager) StartContainer(ctx context.Context, id ContainerID) error {
+func (m *DockerManager) StartSandbox(ctx context.Context, id SandboxID) error {
 	execConfig := container.ExecOptions{
 		AttachStdout: true,
 		AttachStderr: true,
@@ -105,7 +105,7 @@ func (m *DockerManager) StartContainer(ctx context.Context, id ContainerID) erro
 	return nil
 }
 
-func (m *DockerManager) AttachToContainer(ctx context.Context, id ContainerID) (io.Reader, io.WriteCloser, error) {
+func (m *DockerManager) AttachToSandbox(ctx context.Context, id SandboxID) (io.Reader, io.WriteCloser, error) {
 	resp, err := m.dockerClient.ContainerAttach(ctx, id, container.AttachOptions{
 		Stream: true,
 		Stdin:  true,
@@ -118,11 +118,11 @@ func (m *DockerManager) AttachToContainer(ctx context.Context, id ContainerID) (
 	return resp.Reader, resp.Conn, nil
 }
 
-func (m *DockerManager) RemoveContainer(ctx context.Context, id ContainerID) error {
+func (m *DockerManager) RemoveSandbox(ctx context.Context, id SandboxID) error {
 	return m.dockerClient.ContainerRemove(ctx, id, container.RemoveOptions{Force: true})
 }
 
-func (m *DockerManager) CopyFileToContainer(ctx context.Context, id ContainerID, path string, mode int64, data []byte) error {
+func (m *DockerManager) CopyFileToSandbox(ctx context.Context, id SandboxID, path string, mode int64, data []byte) error {
 	// Convert mode to octal string for chmod
 	modeStr := fmt.Sprintf("%o", mode)
 
@@ -184,7 +184,7 @@ func (m *DockerManager) CopyFileToContainer(ctx context.Context, id ContainerID,
 	}
 }
 
-func (m *DockerManager) LoadFileFromContainer(ctx context.Context, id ContainerID, path string) ([]byte, error) {
+func (m *DockerManager) LoadFileFromSandbox(ctx context.Context, id SandboxID, path string) ([]byte, error) {
 	execConfig := container.ExecOptions{
 		AttachStdout: true,
 		AttachStderr: true,
@@ -214,7 +214,7 @@ func (m *DockerManager) LoadFileFromContainer(ctx context.Context, id ContainerI
 	return stdout.Bytes(), nil
 }
 
-func (m *DockerManager) WaitContainer(ctx context.Context, id ContainerID) (StatusCode, error) {
+func (m *DockerManager) WaitSandbox(ctx context.Context, id SandboxID) (StatusCode, error) {
 	execID, ok := m.execIDs[id]
 	if !ok {
 		return -1, fmt.Errorf("no exec ID found for container %s", id)
@@ -232,7 +232,7 @@ func (m *DockerManager) WaitContainer(ctx context.Context, id ContainerID) (Stat
 	}
 }
 
-func (m *DockerManager) ReadLogsFromContainer(ctx context.Context, id ContainerID) (string, error) {
+func (m *DockerManager) ReadLogsFromSandbox(ctx context.Context, id SandboxID) (string, error) {
 	readyCh, ok := m.outputReady[id]
 	if !ok {
 		return "", fmt.Errorf("no output ready for container %s", id)

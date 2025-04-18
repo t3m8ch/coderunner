@@ -8,27 +8,27 @@ import (
 	"sync"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/t3m8ch/coderunner/internal/containerctl"
 	"github.com/t3m8ch/coderunner/internal/filesctl"
 	"github.com/t3m8ch/coderunner/internal/model"
+	"github.com/t3m8ch/coderunner/internal/sandbox"
 )
 
 func HandleTasksToTest(
 	ctx context.Context,
 	filesManager filesctl.Manager,
-	containerManager containerctl.Manager,
+	sandboxManager sandbox.Manager,
 	tasksToTest chan model.Task,
 	redisClient *redis.Client,
 ) {
 	for task := range tasksToTest {
-		handleTaskToTest(ctx, filesManager, containerManager, redisClient, task)
+		handleTaskToTest(ctx, filesManager, sandboxManager, redisClient, task)
 	}
 }
 
 func handleTaskToTest(
 	ctx context.Context,
 	filesManager filesctl.Manager,
-	containerManager containerctl.Manager,
+	sandboxManager sandbox.Manager,
 	redisClient *redis.Client,
 	task model.Task,
 ) {
@@ -74,49 +74,49 @@ func handleTaskToTest(
 
 			fmt.Printf("----- Test #%d ----- \n", i)
 
-			containerID, err := containerManager.CreateContainer(
+			sandboxID, err := sandboxManager.CreateSandbox(
 				ctx,
 				"debian:bookworm",
 				[]string{"sh", "-c", fmt.Sprintf("%s < %s", testingExecPath, inputFilePath)},
 			)
 			if err != nil {
-				fmt.Printf("test #%d: Error creating container: %v\n", i, err)
+				fmt.Printf("test #%d: Error creating sandbox: %v\n", i, err)
 				return
 			}
-			fmt.Printf("test #%d: Container created\n", i)
+			fmt.Printf("test #%d: Sandbox created\n", i)
 
-			err = containerManager.CopyFileToContainer(ctx, containerID, testingExecPath, 0700, executable)
+			err = sandboxManager.CopyFileToSandbox(ctx, sandboxID, testingExecPath, 0700, executable)
 			if err != nil {
-				fmt.Printf("test #%d: Error copying executable to container: %v\n", i, err)
+				fmt.Printf("test #%d: Error copying executable to sandbox: %v\n", i, err)
 				return
 			}
-			fmt.Printf("test #%d: Executable copied to container\n", i)
+			fmt.Printf("test #%d: Executable copied to sandbox\n", i)
 
-			err = containerManager.CopyFileToContainer(ctx, containerID, inputFilePath, 0644, []byte(tests[i].Stdin))
+			err = sandboxManager.CopyFileToSandbox(ctx, sandboxID, inputFilePath, 0644, []byte(tests[i].Stdin))
 			if err != nil {
 				fmt.Printf("test #%d: Error copying input data: %v\n", i, err)
 				return
 			}
 
-			err = containerManager.StartContainer(ctx, containerID)
+			err = sandboxManager.StartSandbox(ctx, sandboxID)
 			if err != nil {
-				fmt.Printf("test #%d: Error starting container: %v\n", i, err)
+				fmt.Printf("test #%d: Error starting sandbox: %v\n", i, err)
 				return
 			}
-			fmt.Printf("test #%d: Container started\n", i)
+			fmt.Printf("test #%d: Sandbox started\n", i)
 
-			statusCode, err := containerManager.WaitContainer(ctx, containerID)
+			statusCode, err := sandboxManager.WaitSandbox(ctx, sandboxID)
 			if err != nil {
-				fmt.Printf("test #%d: Error waiting for container: %v\n", i, err)
+				fmt.Printf("test #%d: Error waiting for sandbox: %v\n", i, err)
 				return
 			}
 
-			output, err := containerManager.ReadLogsFromContainer(ctx, containerID)
+			output, err := sandboxManager.ReadLogsFromSandbox(ctx, sandboxID)
 			if err != nil {
-				fmt.Printf("test #%d: Error reading logs from container: %v\n", i, err)
+				fmt.Printf("test #%d: Error reading logs from sandbox: %v\n", i, err)
 				return
 			}
-			fmt.Printf("test #%d: Output read from container\n", i)
+			fmt.Printf("test #%d: Output read from sandbox\n", i)
 			fmt.Printf("test #%d: %s", i, output)
 
 			fmt.Printf("test #%d: Testing completed with exit code %d\n", i, statusCode)
@@ -141,11 +141,11 @@ func handleTaskToTest(
 				fmt.Printf("test #%d: Actual bytes:   %q\n", i, []byte(output))
 			}
 
-			err = containerManager.RemoveContainer(ctx, containerID)
+			err = sandboxManager.RemoveSandbox(ctx, sandboxID)
 			if err != nil {
-				fmt.Printf("test #%d: Error container removing: %v\n", i, err)
+				fmt.Printf("test #%d: Error sandbox removing: %v\n", i, err)
 			}
-			fmt.Printf("test #%d: Container removed\n", i)
+			fmt.Printf("test #%d: Sandbox removed\n", i)
 		}()
 	}
 

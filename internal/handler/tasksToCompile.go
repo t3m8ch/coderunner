@@ -4,27 +4,27 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/t3m8ch/coderunner/internal/containerctl"
 	"github.com/t3m8ch/coderunner/internal/filesctl"
 	"github.com/t3m8ch/coderunner/internal/model"
+	"github.com/t3m8ch/coderunner/internal/sandbox"
 )
 
 func HandleTasksToCompile(
 	ctx context.Context,
 	filesManager filesctl.Manager,
-	containerManager containerctl.Manager,
+	sandboxManager sandbox.Manager,
 	tasksToCompile chan model.Task,
 	tasksToTest chan model.Task,
 ) {
 	for task := range tasksToCompile {
-		handleTaskToCompile(ctx, filesManager, containerManager, task, tasksToTest)
+		handleTaskToCompile(ctx, filesManager, sandboxManager, task, tasksToTest)
 	}
 }
 
 func handleTaskToCompile(
 	ctx context.Context,
 	filesManager filesctl.Manager,
-	containerManager containerctl.Manager,
+	sandboxManager sandbox.Manager,
 	task model.Task,
 	tasksToTest chan model.Task,
 ) {
@@ -36,51 +36,51 @@ func handleTaskToCompile(
 		return
 	}
 
-	containerID, err := containerManager.CreateContainer(
+	sandboxID, err := sandboxManager.CreateSandbox(
 		ctx,
 		"gcc:latest",
 		[]string{"g++", sourceFilePath, "-o", compileExecPath, "-static"},
 	)
 	if err != nil {
-		fmt.Printf("Error creating container: %v\n", err)
+		fmt.Printf("Error creating sandbox: %v\n", err)
 		return
 	}
 
 	defer func() {
-		err = containerManager.RemoveContainer(ctx, containerID)
+		err = sandboxManager.RemoveSandbox(ctx, sandboxID)
 		if err != nil {
-			fmt.Printf("Error container removing: %v\n", err)
+			fmt.Printf("Error sandbox removing: %v\n", err)
 		}
 	}()
 
-	err = containerManager.CopyFileToContainer(ctx, containerID, sourceFilePath, 0644, codeBinary)
+	err = sandboxManager.CopyFileToSandbox(ctx, sandboxID, sourceFilePath, 0644, codeBinary)
 	if err != nil {
-		fmt.Printf("Error copying code to container: %v\n", err)
+		fmt.Printf("Error copying code to sandbox: %v\n", err)
 		return
 	}
 
-	err = containerManager.StartContainer(ctx, containerID)
+	err = sandboxManager.StartSandbox(ctx, sandboxID)
 	if err != nil {
-		fmt.Printf("Error starting container: %v\n", err)
+		fmt.Printf("Error starting sandbox: %v\n", err)
 		return
 	}
 
-	statusCode, err := containerManager.WaitContainer(ctx, containerID)
+	statusCode, err := sandboxManager.WaitSandbox(ctx, sandboxID)
 	if err != nil {
-		fmt.Printf("Error waiting for container: %v\n", err)
+		fmt.Printf("Error waiting for sandbox: %v\n", err)
 		return
 	}
 	if statusCode != 0 {
 		fmt.Printf("Compilation failed with exit code %d\n", statusCode)
-		logs, err := containerManager.ReadLogsFromContainer(ctx, containerID)
+		logs, err := sandboxManager.ReadLogsFromSandbox(ctx, sandboxID)
 		if err != nil {
-			fmt.Printf("Error reading logs from container: %v\n", err)
+			fmt.Printf("Error reading logs from sandbox: %v\n", err)
 		}
 		fmt.Println(logs)
 		return
 	}
 
-	executable, err := containerManager.LoadFileFromContainer(ctx, containerID, compileExecPath)
+	executable, err := sandboxManager.LoadFileFromSandbox(ctx, sandboxID, compileExecPath)
 	if err != nil {
 		fmt.Printf("Error copying executable: %v\n", err)
 		return
