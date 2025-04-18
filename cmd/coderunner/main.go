@@ -43,8 +43,8 @@ func main() {
 
 	filesManager := filesctl.NewMinioManager(minioClient)
 
-	tasksToCompile := make(chan model.Task, 100)
-	tasksToTest := make(chan model.Task, 100)
+	tasksToCompile := make(chan model.Task, 30)
+	tasksToTest := make(chan model.Task, 2)
 
 	fmt.Println("RUN!")
 
