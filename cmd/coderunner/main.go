@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"time"
+	"strings"
 
 	"github.com/docker/docker/client"
 	"github.com/minio/minio-go/v7"
@@ -33,10 +33,14 @@ func main() {
 		panic(err)
 	}
 
-	var containerManager sandbox.Manager
-	containerManager = sandbox.NewDockerManager(dockerClient)
-	containerManager = sandbox.NewRetryDecorator(containerManager, 3, 2*time.Second)
-	containerManager = sandbox.NewConcurrencyLimitDecorator(containerManager, 5)
+	var sandboxManager sandbox.Manager
+	if strings.ToLower(os.Getenv("USE_TMPFS")) == "true" {
+		fmt.Println("Using tmpfs")
+		sandboxManager = sandbox.NewTMPFSDockerManager(dockerClient)
+	} else {
+		sandboxManager = sandbox.NewDockerManager(dockerClient)
+	}
+
 	filesManager := filesctl.NewMinioManager(minioClient)
 
 	tasksToCompile := make(chan model.Task, 100)
@@ -48,7 +52,7 @@ func main() {
 		go handler.HandleTasksToCompile(
 			ctx,
 			filesManager,
-			containerManager,
+			sandboxManager,
 			tasksToCompile,
 			tasksToTest,
 		)
@@ -58,7 +62,7 @@ func main() {
 		go handler.HandleTasksToTest(
 			ctx,
 			filesManager,
-			containerManager,
+			sandboxManager,
 			tasksToTest,
 			redisClient,
 		)
